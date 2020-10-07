@@ -1,0 +1,832 @@
+---
+title: "Many Heads Are More Utilitarian Than One- R code"
+author: "Anita Keshmirian"
+output: html_document
+---
+
+
+R-Script Author: Anita Keshmirian. For questions email *<anita.keshmirian@gmail.com>*   
+
+The current script contains the code of the analysis
+mentioned in the manuscript preregistered here:  [**/osf.io/vxcp8**](https://osf.io/vxcp8)    
+
+
+*Two versions of this file were provided for OSF. The script can be interacted with using the raw `.Rmd` file in R Studio, or can be read as the output `PDF` file (produced by 'knitting' the `.Rmd` file in R Studio).*   
+   
+
+We include R code so that our analyses can be reproduced. When it was necessary, we explained or unpacked the R code.  
+
+In addition to showing the code for the main analyses and the plots in the main manuscript, we also:
+
+1. Plot variable distributions and show all the plots in supplementary material here as well.
+2. Justify analysis decisions.
+
+Last updated: 6/10/2020
+
+# *Setup*
+
+This is to clear the workspace:
+
+```{r}
+rm(list=ls(all=TRUE))  
+```
+
+You will need these packages to run the rest. **Package** function, below, will install them automatically:
+
+
+```{r results = FALSE, warning= FALSE ,message=FALSE}
+
+package <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if(length(new.pkg)) install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)}
+packages <- c("outliers", "ggmcmc", "brms", "performance", "see","lme4", "lmerTest", "clickR", "pander", 
+              "stargazer", "knitr", "reshape2", "Rmisc",
+              "magrittr", "psych", "lsr", "texreg","xtable",
+              "tidyverse", "ggthemes", "viridis", "grid",
+              "emmeans", "kableExtra", "flextable", "officer", "extofficer")
+package (packages)
+```
+
+
+Make sure that the dataset is in the right directory. Copy and paste the dataset directory to *work_dir*:
+
+```{r}
+work_dir <- "/Users/nita/Desktop/CMD" #The directory of the dataset
+setwd(work_dir)
+main=read.csv("CMD_D.csv", header = TRUE, fill= TRUE,sep=';') #reading the dataset
+```
+
+# *Data Preparation*  
+
+## *Data in long format*  
+
+We convert the data to the long format: 
+
+```{r , results = FALSE, message=FALSE}
+CMD.Long <- dplyr::select(main,set,group,id,age,sex,education, I_1:Z_16) %>%
+  gather(I_1:Z_16, key = "Item", value = "Rating", na.rm = TRUE) %>% 
+  separate(col = Item, into = c("Condition",'Item'), sep = "_") %>% 
+  arrange(set)
+cmdc=CMD.Long #longformat
+```
+
+Here are the main factors of our study: 
+   
+   
+ * **Sets** (For different randomization:1 to 10)  
+ * **Groups** (from 1 to 17)   
+ * **IDs** (Unique for each participants)  
+ * **Conditions** (*First*, *Collective*, *Second*)and   
+ * **Items** (1 to 16).  
+
+Here we set all to factors and re-order their levels for illustration purposes: 
+
+```{r results = FALSE,message=FALSE} 
+cmdc$group=as.factor(cmdc$group)
+cmdc$set=as.factor(cmdc$set)
+cmdc$id=as.factor(cmdc$id)
+cmdc$sex=as.factor(cmdc$sex)
+cmdc$Condition=as.factor(cmdc$Condition)
+cmdc$Item=as.factor(cmdc$Item)
+cmdc$Condition=dplyr::recode(
+cmdc$Condition, 'C'='Collective', 'I'='First', 'Z' = 'Second' )
+#re_name
+```
+
+
+## Randomization  
+
+For each group the *discussed* items were pseudo-randomized according to their sets, see below:  
+
+* Group1: **Action**:   1,2,3,4 -   **Inaction**: 9,10,11,12
+* Group2: **Action**:   2,3,4,5 -   **Inaction**: 10,11,12,13
+* Group3: **Action**:   3,4,5,6 -   **Inaction**: 11,12,13,14
+* Group4: **Action**:   4,5,6,7 -   **Inaction**: 12,13,14,15
+* Group5: **Action**:   5,6,7,8 -   **Inaction**: 13,14,15,16
+* Group6: **Action**:   6,7,8,1 -   **Inaction**: 14,15,16,9
+* Group7: **Action**:   7,8,1,2 -   **Inaction**: 15,16,9,10
+* Group8: **Action**:   8,1,2,3 -   **Inaction**: 16,9,10,11
+* Group9: **Action**:   1,3,5,7 -   **Inaction**: 9,11,13,15
+* Group10:**Action**:   2,4,6,8 -   **Inaction**: 10,12,14,16  
+
+* Group11 to Group 17 are the same as 1 to 7   
+   
+   
+```{r echo=FALSE}
+Groups =matrix(c("1,2,3,4", "9,10,11,12", "2,3,4,5", "10,11,12,13","3,4,5,6","11,12,13,14","4,5,6,7" ,"12,13,14,15", "5,6,7,8", "13.14,15,16", "6,7,8,1", "14,15,16,9", "7,8,1,2","15,16,9,10","8,1,2,3","16,9,10,11","1,3,5,7","2,4,6,8"),ncol=2,nrow=9,byrow=TRUE)
+colnames(Groups) <- c(" Action "," Inaction  ")
+rownames(Groups) <- c("Group1","Group2","Group3","Group4","Group5","Group6 ","Group7","Group8","Group9")
+Groups <-  as.data.frame(Groups)
+```
+
+Here are 
+```{r echo=FALSE}
+Groups %>%
+ kbl(caption = "Randomization of discussed items acrossed groups") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+
+
+Here we define *discussed* items for each group according to their *Set* (see above). We also define a new factor:**Mode**     
+**Mode** includes three levels:  *discussed* or *undiscussed* for items in **J1** (First *Pre-Discussion* Judgments) or **J2**(Second *Post-Discussion* Judgments)    
+
+
+Below is the code for randomization in group 1, for the rest of the groups see the .RMD file
+
+```{r results = FALSE,message=FALSE}
+#group1: Collective: 1,2,3,4,9,10,11,12
+Group1= filter(cmdc, set=='1')
+Group1$Mode= dplyr::if_else(Group1$Item =='1' |
+                            Group1$Item =='2' |
+                            Group1$Item =='3' |
+                            Group1$Item =='4' |
+                            Group1$Item =='9' |
+                            Group1$Item =='10'|
+                            Group1$Item =='11'|
+                            Group1$Item=='12','Discussed','Undiscussed')
+Group1.c=filter(Group1, Condition=='Collective')
+Group1.c$Item=dplyr::recode(Group1.c$Item, 
+                            '1'= '1', '2'= '2', '3'='3',
+                            '4' = '4', '5'= '9', '6' = '10', 
+                            '7' = '11', '8' = '12')
+```
+
+
+```{r results = FALSE,message=FALSE, echo=FALSE}
+#group2: Collective: 2,3,4,5,10,11,12,13
+Group2= filter(cmdc, set=='2')
+Group2$Mode= dplyr::if_else(Group2$Item =='2' |Group2$Item =='3' |Group2$Item =='4' |Group2$Item == '5' |Group2$Item == '10' |Group2$Item == '11' |Group2$Item == '12' |Group2$Item =='13' ,'Discussed','Undiscussed')
+Group2.c=filter(Group2, Condition=='Collective')
+Group2.c$Item=dplyr::recode(Group2.c$Item, '1'= '2', '2'= '3', '3'='4', '4' = '5', '5'= '10', '6' = '11', '7' = '12', '8' = '13' )
+
+
+#group3: Collective: 3,4,5,6,11,12,13,14
+Group3= filter(cmdc, set=='3')
+Group3$Mode= dplyr::if_else(Group3$Item =='3' |Group3$Item =='4' |Group3$Item =='5' |Group3$Item == '6' |Group3$Item == '11' |Group3$Item == '12' |Group3$Item == '13' |Group3$Item =='14' ,'Discussed','Undiscussed')
+Group3.c=filter(Group3, Condition=='Collective')
+Group3.c$Item=dplyr::recode(Group3.c$Item, '1'= '3', '2'= '4', '3'='5', '4' = '6', '5'= '11', '6' = '12', '7' = '13', '8' = '14' )
+
+
+
+#group4: Collective: 4,5,6,7,12,13,14,15
+Group4=filter(cmdc, set=='4')
+Group4$Mode= dplyr::if_else(Group4$Item =='4' |Group4$Item =='5' |Group4$Item =='6' |Group4$Item == '7' |Group4$Item == '12' |Group4$Item == '13' |Group4$Item == '14' |Group4$Item =='15' ,'Discussed','Undiscussed')
+Group4.c=filter(Group4, Condition=='Collective')
+Group4.c$Item=dplyr::recode(Group4.c$Item, '1'= '4', '2'= '5', '3'='6', '4' = '7', '5'= '12', '6' = '13', '7' = '14', '8' = '15' )
+
+
+#group5: Collective: 5,6,7,8,13,14,15,16
+Group5=filter(cmdc, set=='5')
+Group5$Mode= dplyr::if_else(Group5$Item =='5' |Group5$Item =='6' |Group5$Item =='7' |Group5$Item == '8' |Group5$Item == '13' |Group5$Item == '14' |Group5$Item == '15' |Group5$Item =='16' ,'Discussed','Undiscussed')
+Group5.c=filter(Group5, Condition=='Collective')
+Group5.c$Item=dplyr::recode(Group5.c$Item, '1'= '5', '2'= '6', '3'='7', '4' = '8', '5'= '13', '6' = '14', '7' = '15', '8' = '16' )
+
+
+
+#group6: Collective: 6,7,8,1,14,15,16,9
+Group6=filter(cmdc, set=='6')
+Group6$Mode= dplyr::if_else(Group6$Item =='6' |Group6$Item =='7' |Group6$Item =='8' |Group6$Item == '1' |Group6$Item == '14' |Group6$Item == '15' |Group6$Item == '16' |Group6$Item =='9' ,'Discussed','Undiscussed')
+Group6.c=filter(Group6, Condition=='Collective')
+Group6.c$Item=dplyr::recode(Group6.c$Item, '1'= '6', '2'= '7', '3'='8', '4' = '1', '5'= '14', '6' = '15', '7' = '16', '8' = '9' )
+
+
+
+#group7: Collective: 7,8,1,2,15,16,9,10
+Group7=filter(cmdc, set=='7')
+Group7$Mode= dplyr::if_else(Group7$Item =='7' |Group7$Item =='8' |Group7$Item =='1' |Group7$Item == '2' |Group7$Item == '15' |Group7$Item == '16' |Group7$Item == '9' |Group7$Item =='10' ,'Discussed','Undiscussed')
+Group7.c=filter(Group7, Condition=='Collective')
+Group7.c$Item=dplyr::recode(Group7.c$Item, '1'= '7', '2'= '8', '3'='1', '4' = '2', '5'= '15', '6' = '16', '7' = '9', '8' = '10' )
+
+
+
+#group8: Collective: 8,1,2,3,16,9,10,11
+Group8=filter(cmdc, set=='8')
+Group8$Mode= dplyr::if_else(Group8$Item =='8' |Group8$Item =='1' |Group8$Item =='2' |Group8$Item == '3' |Group8$Item == '16' |Group8$Item == '9' |Group8$Item == '10' |Group8$Item =='11' ,'Discussed','Undiscussed')
+Group8.c=filter(Group8, Condition=='Collective')
+Group8.c$Item=dplyr::recode(Group8.c$Item, '1'= '8', '2'= '1', '3'='2', '4' = '3', '5'= '16', '6' = '9', '7' = '10', '8' = '11' )
+
+
+#group9: Collective: 1,3,5,7,9,11,13,15
+Group9=filter(cmdc, set=='9')
+Group9$Mode= dplyr::if_else(Group9$Item =='1' |Group9$Item =='3' |Group9$Item =='5' |Group9$Item == '7' |Group9$Item == '9' |Group9$Item == '11' |Group9$Item == '13' |Group9$Item =='15' ,'Discussed','Undiscussed')
+Group9.c=filter(Group9, Condition=='Collective')
+Group9.c$Item=dplyr::recode(Group9.c$Item, '1'= '1', '2'= '3', '3'='5', '4' = '7', '5'= '9', '6' = '11', '7' = '13', '8' = '15' )
+
+#group10: Collective: 2,4,6,8,10,12,14,16
+Group10=filter(cmdc, set=='10')
+Group10$Mode= dplyr::if_else(Group10$Item =='2' |Group10$Item =='4' |Group10$Item =='6' |Group10$Item == '8' |Group10$Item == '10' |Group10$Item == '12' |Group10$Item == '14' |Group10$Item =='16' ,'Discussed','Undiscussed')
+Group10.c=filter(Group10, Condition=='Collective')
+Group10.c$Item=dplyr::recode(Group10.c$Item, '1'= '2', '2'= '4', '3'='6', '4' = '8', '5'= '10', '6' = '12', '7' = '14', '8' = '16' )
+
+```
+
+Here we bind all of the groups:
+```{r results = FALSE,message=FALSE, echo=TRUE}
+
+#Now we bind all the above groups:
+
+G=rbind(Group1,Group2,Group3,Group4,Group5,Group6,Group7,Group8,Group9,Group10)
+G.c =rbind(Group1.c,Group2.c,Group3.c,Group4.c,Group5.c,Group6.c,Group7.c,Group8.c,Group9.c,Group10.c)
+
+
+#non-collective (I1 and I2)
+data=filter(G,Condition != 'Collective')
+data=rbind(data,G.c)
+data$Condition=as.factor(data$Condition)
+
+#collective
+
+data.c=filter(data, data$Condition == 'Collective')
+data.c$Mode= 'Collective'
+data.I=filter(data, data$Condition!= 'Collective')
+
+Data=rbind(data.c,data.I)
+
+Data$Mode= dplyr::if_else(Data$Condition =='Collective' ,'Collective',Data$Mode)
+
+```
+
+This is to define the factor **type** with two levels:  
+
+* *Action* (8 items)    
+* *In_Action* (8 items)    
+
+
+```{r results = FALSE,message=FALSE}
+#Action vs In_action  
+Data$type= dplyr::if_else( Data$Item =='1' 
+                          |Data$Item =='2' 
+                          |Data$Item =='3' 
+                          |Data$Item =='4' 
+                          |Data$Item =='5' 
+                          |Data$Item =='6' 
+                          |Data$Item =='7' 
+                          |Data$Item =='8' ,'Action','InAction')
+```
+
+
+```{r results = FALSE, echo=FALSE}
+Data$Condition=factor(Data$Condition,c('First','Collective','Second'))
+Data$group=factor(Data$group,c('1','2','3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13' , '14' , '15', '16', '17'))
+
+Data$Item=factor(Data$Item,c('1','2','3','4', '5', '6', '7', '8', '9', '10', '11', '12', '13' , '14' , '15', '16'))
+
+```
+
+## *Outlier Dectection*
+
+In this section we detect the outliers at group level with different methods. For this, we will need use a function called **check_outliers** which is documented in RDocumentation 
+[**here**](https://www.rdocumentation.org/packages/performance/versions/0.5.0/topics/check_outliers)  
+
+### *Outlier Detection Setup*  
+
+We first need to prepare the data in the right format which gives each group's  
+
+
++ **a.** *ratings before the discussion (J1)*  
++ **b.** *collective ratings (JC)*  
++ **c.** *ratings after the discussion (J2)*  
+
+First we divide the dataset into three parts: *First*, *Second* and *Collective* and then each of them to *Discussed* vs. *Undiscuessed* subdivision:
+
+```{r results = FALSE,message=FALSE}
+datac=Data
+#division by condition
+first=filter(datac,Condition=='First')
+second=filter(datac,Condition=='Second')
+collective=filter(datac,Condition=='Collective')
+
+#division by Mode:discussed and undiscussed 
+#in J1 (i.e. pre-discussion)
+fd=dplyr::filter(first,Mode=='Discussed') %>%
+  dplyr::group_by(id,Item,group) %>%
+  dplyr::summarise(J1D = mean(Rating)) 
+
+fu=dplyr::filter(first,Mode=='Undiscussed') %>%
+  dplyr::group_by(id,Item,group) %>%
+  dplyr::summarise(J1U = mean(Rating)) 
+          
+#division by Mode:discussed and undiscussed 
+#in J2 (i.e. postdiscussion)
+sd=dplyr::filter(second,Mode=='Discussed') %>%
+  dplyr::group_by(id,Item,group) %>%
+  dplyr::summarise(J2D = mean(Rating))
+
+su=dplyr::filter(second,Mode=='Undiscussed') %>%
+  dplyr::group_by(id,Item,group) %>%
+  dplyr::summarise(J2U = mean(Rating))
+
+##division by Mode:collective (i.e. post-discussion)
+c=collective %>%
+  dplyr::group_by(id,Item,group) %>%
+  dplyr::summarise(JC = mean(Rating))
+
+GDT=merge(fd,c,by=c('id','group','Item'))
+IGD=merge(GDT,sd,by=c('id','group','Item')) ##discussed items-including Collective
+IGU=merge(fu,su,by=c('id','group','Item'))  ##undiscussed items
+```
+
+Now we average all responses at group level:
+
+```{r results = FALSE,message=FALSE}
+TD=dplyr::filter(IGD,) %>%
+  dplyr::group_by(group) %>%
+  dplyr::summarise(J1D = mean(J1D),JC=mean(JC),J2D=mean(J2D))
+
+TU=dplyr::filter(IGU,) %>%
+  dplyr::group_by(group) %>%
+ dplyr:: summarise(J1U = mean(J1U),J2U=mean(J2U))
+
+DT=merge(TD,TU,by=c('group'))
+DT=arrange(DT,by=group)
+```
+
+Here we plot a box-plot to visualize the outliers in **JC** (Collective Judgments) at group level
+
+```{r, fig.align = "center"}
+##Outliers
+g1=ggplot (DT, aes (y = JC))  + geom_boxplot () +
+  labs(title = "Collective responses with outlier",y = "Collective Ratings")
+
+g1 +theme_minimal()+ coord_flip()
+```
+  
+  
+According to the boxplot above,the collective response with the lowest rating seems to be an outlier.  
+
+
+To perform tests for outlier detection, we use **outlier_function** which uses a composite measure combined of different methods including:   
+
+* *Cook's Distance*,
+* *Pareto*, 
+* *Z-scores*,
+* *IQR*, 
+* *Mahalanobis Distance*,
+* *Robust Mahalanobis Distance*,
+* *Minimum Covariance Determinant (MCD)*,
+* *Invariant Coordinate Selection (ICS)*,
+* *OPTICS*,
+* *Isolation Forest*,
+* *Local Outlier Factor*.    
+
+We use this composite measurement in a  **Multivariate approach** which includes ratings for  **Collective** as well ass **Discussed**, **Undiscussed** items for **First** and **Second** condition, but at group level.
+
+For documentation and references please check here [**outlier_function**](https://www.rdocumentation.org/packages/performance/versions/0.5.0/topics/check_outliers)
+
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, results=TRUE}
+
+Outliers=performance::check_outliers(DT[,c(2,3,4,5,6)], method="all")#multivariate  
+Outliers.2=performance::check_outliers(DT[c(4)],c("zscore", "mahalanobis", "igr")) #univariate 
+
+```
+
+Here is the output of the outlier check shows an outlier:
+
+```{r  results=TRUE}
+plot(Outliers)
+print(Outliers)
+```
+
+
+```{r  results=TRUE}
+plot(Outliers.2)
+print(Outliers.2)
+```
+
+```{r, echo=FALSE}
+ol=attributes(Outliers)
+Scores=ol$data #to check the scores of each method see scores 
+```
+
+The composite methods of multivariate approach as well as univariate approach, similarly tells us group 4 is an outlier. Now we check the data without the outlier group to make sure the other groups are fine:
+
+In addition to the composite method above, we use **outliers** library for three univariate methods, *grubbs*, *dixon* and *chisq*  proposed for small sample sizes (see the library documentation for the references)
+
+```{r, message= TRUE}
+test1 = outliers::grubbs.test(DT$JC)
+print(test1)
+```
+
+
+```{r, message= TRUE}
+test2 = outliers::dixon.test(DT$JC)
+print(test2)
+```
+
+
+```{r, message= TRUE}
+test3 = outliers::chisq.out.test(DT$JC, variance=var(DT$JC))
+print(test3)
+```
+
+
+
+
+
+
+Different methods detect group 4 (Mean JC=1.5) as an outlier, therefore, we exclude group 4 from the data for the rest of the analysis.
+
+```{r, echo=FALSE}
+df.main= filter(Data, group!=4)
+df=filter(main, group!=4)
+df$sex=as.factor(df$sex)
+part=nrow(df)
+```
+
+
+**Summary of participants**: 
+
+ + `r length(unique(df$group))`  groups  
+ + Age: from `r min(df$age)`  to `r max(df$age)`, mean `r mean(df$age)`, standard deviation `r sd(df$age)`    
+ + Sample Size: 73 `r print(nrow(df))`
+ + Gender(f/m): `r print(summary(df$sex))` 
+
+
+
+# *Main plots*
+
+## **Plotting** *Condition* and *Mode*
+
+
+```{r, fig.align = "center", results=TRUE}
+pos<- position_dodge(0.95)
+graph <- ggplot(filter(df.main), aes(x =Condition   , y = Rating, fill = Mode ))
+
+graph  + 
+  geom_violin(stat = "ydensity", position = pos) +
+  stat_summary(fun.data = mean_cl_normal, fun.args = list(conf.int=.95), 
+               geom = "errorbar", width = 0.2, size = .75, position = pos,col='black')+
+  scale_y_continuous(limits = c(1 , 7), breaks = c(1,2,3,4,5,6,7)) +
+  labs(x = "", y = "Utilitarian Score", fill = "Condition") +
+  scale_colour_viridis_d(alpha = .9, begin = .1, end = .9,
+                         direction = 1, option = "viridis", aesthetics = "fill")+
+ theme_classic()
+
+```
+
+## **Plotting** *Condition* and *Type*
+
+```{r, fig.align = "center", results=TRUE}
+pos<- position_dodge(0.95)
+graph <- ggplot(filter(df.main), aes(x =type   , y = Rating, fill = Condition ))
+
+graph  + 
+  geom_violin(stat = "ydensity", position = pos) +
+  stat_summary(fun.data = mean_cl_normal, fun.args = list(conf.int=.95), 
+               geom = "errorbar", width = 0.2, size = .75, position = pos,col='black')+
+  scale_y_continuous(limits = c(1 , 7), breaks = c(1,2,3,4,5,6,7)) +
+  labs(x = "", y = "Utilitarian Score", fill = "Condition") +
+  scale_colour_viridis_d(alpha = .9, begin = .1, end = .9,
+                         direction = 1, option = "viridis", aesthetics = "fill")+
+ theme_classic()
+```
+
+
+
+### *Simple ANOVA analysis plot for groups*. We use **ggstatsplot** to show the test result as well as the figure
+
+```{r ,fig.align = "center", results=TRUE, message=FALSE}
+##plotting item-based analysis  data 
+Items=dplyr::filter(df.main,) %>%
+  dplyr::group_by(Item,Condition) %>%
+  dplyr::summarise(Rating = mean(Rating)) 
+
+ggstatsplot::ggwithinstats(
+  data= filter(Items,),
+  x=Condition,
+  y= Rating,
+  ylab= 'Utilitarian Score',
+  point.path= TRUE,
+  ggtheme = ggthemes::theme_hc(),
+  type = "p",
+  effsize.type = "biased",
+  pairwise.comparisons = TRUE,
+  pairwise.annotation = "p.value",
+  nboot = 100,
+  bf.message= TRUE,
+  results.subtitle= TRUE,
+  ggstatsplot.layer = TRUE
+
+)
+
+```
+
+### *ANOVA analysis plot for items* (This is item-based analysis mentioned in the suplementory material )
+
+```{r  ,fig.align = "center", results=TRUE, message=FALSE}
+##plotting group-based analysis  data 
+Group=dplyr::filter(df.main,) %>%
+  dplyr::group_by(group,Condition) %>%
+  dplyr::summarise(Rating = mean(Rating))
+
+ggstatsplot::ggwithinstats(
+data= dplyr::filter(Group,),
+x=Condition,
+y= Rating,
+  ylab= 'Utilitarian Score',
+  point.path= TRUE,
+  ggtheme = ggthemes::theme_hc(),
+  type = "p",
+  effsize.type = "biased",
+  pairwise.comparisons = TRUE,
+  pairwise.annotation = "p.value",
+  nboot = 1,
+  bf.message= TRUE,
+  results.subtitle= TRUE,
+  ggstatsplot.layer = TRUE)
+```
+
+   
+
+# **Mixed Effect Models**
+Since the dependent variable (i.e. moral judgment) is measured in Likert scale, we used ordinal regression models. For that, we first need to convert our variables to *Factors*. See the documentation for **ordinal** package for more information.
+
+```{r}
+D=df.main
+D$Rating=as.factor(D$Rating)
+D$Item=as.factor(D$Item)
+D$group=as.factor(D$group)
+D$id=as.factor(D$id)
+```
+
+We first check how adding different random slopes (random factors) would improve our model:
+
+```{r }
+model1=ordinal::clmm(Rating ~ Condition  + (1|Item)  , data=D) #Random:item
+
+model2=ordinal::clmm(Rating ~ Condition  + (1|group/id) , data=D) #Random:group and id
+
+model3=ordinal::clmm(Rating ~ Condition  + (1|Item) + (1|group/id) , data=D)#Random:group, id and item 
+
+```
+
+
+Table of the winning model follows:
+
+```{r, results = 'asis', echo = FALSE}
+texreg(model3, table = TRUE, use.packages = FALSE)
+```
+
+
+We compare different models above with **anova** function
+`r pander(anova(model1,model2,model3))`
+
+According to **anova** output (see above) the model with **Item** as random factors and **id** per **group** as nested factors is the best fit
+
+
+Here we report the summary of the winning model (i.e. model 3)
+
+```{r}
+sum3=summary(model3)
+stargazer(sum3$coefficients, type = "LaTeX")
+```
+
+
+```{r,echo=FALSE}
+comp=emmeans(model3, specs = pairwise ~ Condition)
+compcont=comp$contrasts
+```
+
+According to the winning model, the ratings of **Condition:** *Collective* is significantly different from *First* and *Second* condition. We will later use Bayesian Regressions to make sure if the **First** and **Second** posterior distribution are different.
+
+We use **emmeans function** for pairwise comparison between the condition  
+
+```{r}
+comp=emmeans(model3, specs = pairwise ~ Condition)
+compcont=comp$contrasts
+```
+
+
+```{r, results = 'asis', echo = FALSE}
+xtable(compcont, type='LaTeX')
+```
+
+Now apply the model to a subset of data excluding the groups with missing values. 
+
+```{r}
+D$group=as.integer(D$group)
+nna=filter(D,group<13)
+nna$group=as.factor(nna$group)
+D$group=as.factor(D$group)
+model3.nna=ordinal::clmm(Rating ~ Condition  + (1|Item) + (1|group/id) , data=nna)
+```
+
+
+```{r}
+sumn.a=summary(model3.nna)
+stargazer(sumn.a$coefficients, type = "LaTeX")
+```
+
+```{r}
+comp.na=emmeans(model3.nna, specs = pairwise ~ Condition)
+compcont.na=comp.na$contrasts
+```
+
+```{r}
+kable(compcont.na, "html") %>%
+  kable_styling("striped") %>%
+  save_kable("test.pdf")
+```
+
+
+
+```{r, results = 'asis', echo = FALSE}
+xtable(compcont.na, type='LaTeX')
+```
+
+Similarly, we apply the same model to a subset of data which only includes the discussed items.
+
+```{r}
+df.d=filter(D,Mode!="Undiscussed")
+model3.dis=ordinal::clmm(Rating ~ Condition  + (1|Item) + (1|group/id) , data=df.d)
+```
+
+```{r}
+sumn.dis=summary(model3.dis)
+stargazer(model3.dis$coefficients, type = "LaTeX")
+```
+
+```{r}
+comp.dis=emmeans(model3.dis, specs = pairwise ~ Condition)
+compcont.dis=comp.dis$contrasts
+```
+
+```{r, results = 'asis', echo = FALSE}
+xtable(compcont.dis, type='LaTeX')
+```
+
+```{r}
+kable(compcont.dis, "html") %>%
+  kable_styling("striped") 
+```
+
+
+We check the effect for two **type** of the items : *Action* and *Inactions*
+
+```{r}
+model.typ=ordinal::clmm(Rating ~ Condition * type + (1|Item) + (1|group/id) , data=D)
+```
+
+
+
+```{r}
+sum4=summary(model.typ)
+stargazer(model.typ$coefficients, type = "LaTeX")
+```
+
+This shows no interaction between the effect and the Action vs In-actions items
+```{r}
+model5=ordinal::clmm(Rating ~ Condition + type + (1|Item) + (1|group/id) , data=D)
+```
+
+Here we show the pairwise comparison between type and condition 
+`r pander(anova(model6, model7)) ` 
+
+Above, the *anova* function shows no difference between the models. Here we report the pairwise comparison between two types of items, action and in-action:
+
+```{r}
+sum5=summary(model5)
+stargazer(sum5$coefficients, type = "LaTeX")
+```
+
+Here we show the pairwise comparison
+```{r}
+comp.a=emmeans(model5, specs = pairwise ~ Condition * type)
+compcont.a=comp.a$contrasts
+```
+
+```{r, results = 'asis', echo = FALSE}
+xtable(compcont.a, type = "LaTex")
+```
+
+Finally, to compare the utilitarian score of discussed and undiscussed items before and after the discussion, we excluded collective judgments and only include First and Second conditions in a new model. In this model, we compared change of utilitarian score as a function of interaction between Condition (First vs. Second) and Mode (discussed vs. undiscussed).
+
+Here we use this model to check the effect of the discussion in *Discussed* vs. *Undiscussed* items in  **Condition:** *First* and *Second*.  First we exclude the **Collective** condition from the dataset and later we use **Mode** with two levels of  *Discussed* vs. *Undiscussed* items as a new factor in out model.
+
+
+```{r}
+D3=filter(D,Condition!='Collective')
+model.int=ordinal::clmm(Rating ~ Condition * Mode + (1|Item) + (1|group/id) , data=D3)
+```
+
+```{r}
+sum.int=summary(model.int)
+stargazer(sum.int$coefficients, type = "LaTeX")
+```
+
+```{r}
+comp3=emmeans(model.int, specs = pairwise ~ Condition * Mode)
+compcont3=comp3$contrasts
+```
+
+```{r, results = 'asis', echo = FALSE}
+xtable(compcont3, type = "LaTex")
+```
+
+```{r}
+kable(compcont3)
+```
+
+
+
+This shows no interaction. We will later use Bayesian Regressions to make sure if the **First** and **Second** posterior distribution are not different from zero.
+
+We check the effect for **type** of the items : *Action* and *In-actions*
+
+```{r}
+model6=ordinal::clmm(Rating ~ Condition * type + (1|Item) + (1|group/id) , data=D)
+```
+
+
+```{r}
+sum6=summary(model6)
+stargazer(sum6$coefficients, type = "LaTeX")
+```
+
+This shows no interaction between the effect and the Action vs In-actions items
+```{r}
+model7=ordinal::clmm(Rating ~ Condition + type + (1|Item) + (1|group/id) , data=D)
+```
+
+Here we show the pairwise comparison between type and condition 
+`r pander(anova(model6, model7)) ` 
+
+Above, the *anova* function shows no difference between the models. Here we report the pairwise comparison between two types of items, action and in-action:
+
+
+```{r}
+comp2=emmeans(model7, specs = pairwise ~ Condition * type)
+compcont2=comp2$contrasts
+```
+
+```{r, results = 'asis', echo = FALSE}
+xtable(compcont2, type = "LaTex")
+```
+
+## Linear Mixed Effect Model  
+
+Alternatively, we run  a similar model by using linear mixed effect models.In order to make sure that the assumption of normal distribution did not affect our result in our logistic model described, we adopt this alternative analysis. Here, instead of considering items as random slopes, we averaged them across individuals in different condition. 
+
+```{r, results=FALSE, warning=FALSE}
+avg=filter(Data,group!=4) %>%
+  dplyr::group_by(group,id,Condition) %>%
+  dplyr::summarise(J = mean(Rating))
+
+```
+
+```{r}
+m1=lme4::lmer(J ~ Condition  + (1|group/id) , data = avg)
+```
+
+```{r}
+summary(m1)
+compm1=emmeans(m1, specs = pairwise ~ Condition)
+compcontm1=compm1$contrasts
+```
+
+```{r results = 'asis', echo = FALSE}
+xtable(compcontm1, type = "LaTex")
+```
+
+#Baysian Mixed Models
+
+In the main text we report an analysis with a weakly informative prior (model betas drawn from `normal(0,1)`). 
+
+```{r}
+Prior <-set_prior("normal(0,1)", class="b")
+
+formula = Rating ~ Condition +  (1|group/id) + (1|Item) 
+fit_b <- brm(formula,
+  data = Data,
+  prior= Prior,
+  cores = 2,
+  chains = 5,
+  iter = 4000,
+  file="fit_ful.rda"
+)
+```
+
+
+```{r}
+sum_fit=summary(fit_b)
+stargazer(sum_fit$fixed, type = "LaTeX")
+stargazer(sum_fit$random, type = "LaTeX")
+```
+
+
+```{r}
+h1 = hypothesis(fit_b,"ConditionCollective =0")
+h2 = hypothesis(fit_b, hypothesis = 'ConditionSecond = 0')
+plot(h1)
+```
+
+
+
+
+
+
+
+
